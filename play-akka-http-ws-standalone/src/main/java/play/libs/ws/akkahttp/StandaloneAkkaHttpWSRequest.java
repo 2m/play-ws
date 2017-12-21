@@ -4,21 +4,18 @@
 package play.libs.ws.akkahttp;
 
 import akka.actor.ActorSystem;
-import akka.http.impl.model.parser.HeaderParser$;
 import akka.http.javadsl.Http;
 import akka.http.javadsl.model.*;
 import akka.http.javadsl.model.headers.Authorization;
 import akka.http.javadsl.model.headers.BasicHttpCredentials;
 import akka.http.javadsl.model.headers.Cookie;
+import akka.http.javadsl.model.headers.Host;
 import akka.japi.Pair;
-import akka.parboiled2.ParserInput$;
 import akka.pattern.PatternsCS;
 import akka.stream.Materializer;
 import play.libs.ws.*;
 import scala.concurrent.duration.FiniteDuration;
-import scala.util.Either;
 
-import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -147,7 +144,7 @@ public final class StandaloneAkkaHttpWSRequest implements StandaloneWSRequest {
       final CompletableFuture<StandaloneAkkaHttpWSResponse> resultFuture =
         Http.get(sys)
           .singleRequest(((StandaloneAkkaHttpWSRequest)request).request)
-          .thenApply((r) -> new StandaloneAkkaHttpWSResponse(r, mat))
+          .thenApply((r) -> new StandaloneAkkaHttpWSResponse(r, sys, mat))
           .toCompletableFuture();
 
       if (timeout.equals(Duration.ZERO)) {
@@ -209,12 +206,12 @@ public final class StandaloneAkkaHttpWSRequest implements StandaloneWSRequest {
     if (body instanceof InMemoryBodyWritable) {
       final InMemoryBodyWritable writable = (InMemoryBodyWritable)body;
       return copy(request.withEntity(
-        HttpEntities.create(parseContentType(body.contentType()), writable.body().get())));
+        HttpEntities.create(ContentTypes.parse(body.contentType()), writable.body().get())));
     }
     else if (body instanceof SourceBodyWritable) {
       final SourceBodyWritable writable = (SourceBodyWritable)body;
       return copy(request.withEntity(
-        HttpEntities.create(parseContentType(body.contentType()), writable.body().get())));
+        HttpEntities.create(ContentTypes.parse(body.contentType()), writable.body().get())));
     }
     else {
       throw new IllegalArgumentException("Unsupported BodyWritable: " + body);
@@ -231,16 +228,10 @@ public final class StandaloneAkkaHttpWSRequest implements StandaloneWSRequest {
    */
   @Override
   public StandaloneWSRequest setHeaders(Map<String, List<String>> headers) {
-    // FIXME JAVA API no Java Api to replace headers on a request
-    HttpRequest requestNoHeaders = request;
-    for (HttpHeader h: request.getHeaders()) {
-      requestNoHeaders = requestNoHeaders.removeHeader(h.name());
-    }
-
     return copy(
-      requestNoHeaders.addHeaders(
+      request.withHeaders(
         headers.entrySet().stream().flatMap(
-          (h) -> h.getValue().stream().map((v) -> parseHeader(h.getKey(), v))
+          (h) -> h.getValue().stream().map((v) -> HttpHeader.parse(h.getKey(), v))
         ).collect(Collectors.toList()))
     );
   }
@@ -256,7 +247,7 @@ public final class StandaloneAkkaHttpWSRequest implements StandaloneWSRequest {
    */
   @Override
   public StandaloneWSRequest addHeader(String name, String value) {
-    return copy(request.addHeader(parseHeader(name, value)));
+    return copy(request.addHeader(HttpHeader.parse(name, value)));
   }
 
   /**
@@ -419,12 +410,7 @@ public final class StandaloneAkkaHttpWSRequest implements StandaloneWSRequest {
    */
   @Override
   public StandaloneWSRequest setVirtualHost(String virtualHost) {
-    // FIXME JAVA API missing Host.create(Authority) Java Api in Akka Http
-    return copy(request.addHeader(akka.http.scaladsl.model.headers.Host.apply(
-      akka.http.scaladsl.model.Uri.Authority$.MODULE$.parse(
-        ParserInput$.MODULE$.apply(virtualHost),
-        Charset.forName("UTF8"),
-        akka.http.scaladsl.model.Uri$ParsingMode$Relaxed$.MODULE$))));
+    return copy(request.addHeader(Host.create(Authority.create(virtualHost))));
   }
 
   /**
@@ -481,10 +467,8 @@ public final class StandaloneAkkaHttpWSRequest implements StandaloneWSRequest {
    */
   @Override
   public StandaloneWSRequest setContentType(String contentType) {
-    // FIXME JAVA API entity.withContentType is missing in Java Api of Akka Http
     return copy(request.withEntity(
-      ((RequestEntity)((akka.http.scaladsl.model.HttpEntity)request.entity()).withContentType((akka.http.scaladsl.model.ContentType)parseContentType(contentType)))
-    ));
+      (RequestEntity)request.entity().withContentType(ContentTypes.parse(contentType))));
   }
 
   /**
@@ -613,33 +597,8 @@ public final class StandaloneAkkaHttpWSRequest implements StandaloneWSRequest {
    */
   @Override
   public String getContentType() {
-    // FIXME JAVA API no CotentTypes.NoContentType Java Api in Akka Http
     return request.entity().getContentType()
-      .equals(akka.http.scaladsl.model.ContentTypes.NoContentType()) ? null : request.entity().getContentType().toString();
-  }
-
-  private HttpHeader parseHeader(String name, String value) {
-    // FIXME JAVA API missing HttpHeader.parse Java API in Akka Http
-    final akka.http.scaladsl.model.HttpHeader.ParsingResult result =
-      akka.http.scaladsl.model.HttpHeader$.MODULE$.parse(name, value, HeaderParser$.MODULE$.DefaultSettings());
-
-    if (result instanceof akka.http.scaladsl.model.HttpHeader$ParsingResult$Ok) {
-      return ((akka.http.scaladsl.model.HttpHeader$ParsingResult$Ok)result).header();
-    }
-    else {
-      throw new IllegalArgumentException("Unable to parse header [" + name + "] with value [" + value + "]");
-    }
-  }
-
-  private ContentType parseContentType(String contentType) {
-    // FIXME JAVA API missing ContentType.parse Java API in Akka Http
-    final Either<scala.collection.immutable.List<akka.http.scaladsl.model.ErrorInfo>, akka.http.scaladsl.model.ContentType> contentTypeEither = akka.http.scaladsl.model.ContentType$.MODULE$.parse(contentType);
-    if (contentTypeEither.isRight()) {
-      return contentTypeEither.right().get();
-    }
-    else {
-      throw new IllegalArgumentException("Unable to parse content type: " + contentType);
-    }
+      .equals(ContentTypes.NO_CONTENT_TYPE) ? null : request.entity().getContentType().toString();
   }
 
   private StandaloneWSRequest copy(HttpRequest request) {

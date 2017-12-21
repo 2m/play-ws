@@ -3,10 +3,10 @@
  */
 package play.libs.ws.akkahttp;
 
-import akka.http.javadsl.model.HttpHeader;
-import akka.http.javadsl.model.HttpResponse;
-import akka.http.javadsl.model.ResponseEntity;
+import akka.actor.ActorSystem;
+import akka.http.javadsl.model.*;
 import akka.http.javadsl.model.headers.SetCookie;
+import akka.http.javadsl.unmarshalling.Unmarshaller;
 import akka.stream.Materializer;
 import akka.stream.javadsl.Sink;
 import akka.stream.javadsl.Source;
@@ -28,12 +28,14 @@ public final class StandaloneAkkaHttpWSResponse implements StandaloneWSResponse 
   final Duration UNMARSHAL_TIMEOUT = Duration.ofSeconds(1);
 
   private final HttpResponse response;
+  private final ActorSystem sys;
   private final Materializer mat;
 
   private HttpResponse strictResponse;
 
-  StandaloneAkkaHttpWSResponse(HttpResponse response, Materializer mat) {
+  StandaloneAkkaHttpWSResponse(HttpResponse response, ActorSystem sys, Materializer mat) {
     this.response = response;
+    this.sys = sys;
     this.mat = mat;
   }
 
@@ -106,9 +108,8 @@ public final class StandaloneAkkaHttpWSResponse implements StandaloneWSResponse 
    */
   @Override
   public String getContentType() {
-    // FIXME JAVA API no CotentTypes.NoContentType Java Api in Akka Http
     return response.entity().getContentType()
-      .equals(akka.http.scaladsl.model.ContentTypes.NoContentType()) ? null : response.entity().getContentType().toString();
+      .equals(ContentTypes.NO_CONTENT_TYPE) ? null : response.entity().getContentType().toString();
   }
 
   /**
@@ -173,9 +174,8 @@ public final class StandaloneAkkaHttpWSResponse implements StandaloneWSResponse 
   @Override
   public ByteString getBodyAsBytes() {
     try {
-      // FIXME JAVA API no Unmarshalling Java API in Akka Http
-      return getStrictResponse().entity().getDataBytes()
-        .runWith(Sink.fold(ByteString.empty(), (b1, b2) -> b1.concat(b2)), mat)
+      return Unmarshaller.entityToByteString()
+        .unmarshal(getStrictResponse().entity(), mat)
         .toCompletableFuture()
         .get(UNMARSHAL_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
     }
@@ -195,12 +195,10 @@ public final class StandaloneAkkaHttpWSResponse implements StandaloneWSResponse 
     }
     else {
       try {
-        final ResponseEntity strictEntity = response.entity()
-          .toStrict(UNMARSHAL_TIMEOUT.toMillis(), mat)
+        this.strictResponse = response
+          .toStrict(UNMARSHAL_TIMEOUT.toMillis(), sys.dispatcher(), mat)
           .toCompletableFuture()
           .get(UNMARSHAL_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
-        // FIXME JAVA API no toStrict Java API in Akka Http
-        this.strictResponse = response.withEntity(strictEntity);
         return this.strictResponse;
       }
       catch (Exception ex) {
